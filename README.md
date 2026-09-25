@@ -1,2 +1,2 @@
 # RideMatchingSystem
-Make Ride Matching Sysyem real time using SignalR. 
+Make the Ride Matching System real-time using SignalR. 
