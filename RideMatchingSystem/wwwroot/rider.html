@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+
+    <title>Rider App</title>
+
+    <link rel="stylesheet" href="/css/style.css">
+
+    <script src="https://cdn.jsdelivr.net/npm/@microsoft/signalr@8.0.7/dist/browser/signalr.min.js"></script>
+
+</head>
+
+<body>
+
+    <div class="container">
+
+        <h1>Rider App</h1>
+
+        <div class="card">
+
+            <h2>Rider Registration</h2>
+
+            <input id="riderName" placeholder="Full Name">
+
+            <input id="riderPhone" placeholder="Phone Number">
+
+            <button onclick="createRider()">
+                Register Rider
+            </button>
+
+        </div>
+
+        <div class="card">
+
+            <h2>Select Rider</h2>
+
+            <select id="riderSelect" onchange="selectRider()">
+
+                <option value="">
+                    Select Rider
+                </option>
+
+            </select>
+
+        </div>
+
+        <div class="card">
+
+            <h2>Book Ride</h2>
+
+            <button onclick="useCurrentLocation()">
+                Use Current Location
+            </button>
+
+            <label>Pickup</label>
+
+            <input id="pickupSearch" placeholder="Search pickup location">
+
+            <button onclick="searchPickup()">
+                Search
+            </button>
+
+            <div id="pickupResults"></div>
+
+            <p>
+                Pickup:
+                <span id="pickupText">
+                    Not selected
+                </span>
+            </p>
+
+            <input id="pickupLatitude" type="hidden">
+
+            <input id="pickupLongitude" type="hidden">
+
+
+            <label>Drop</label>
+
+            <input id="dropSearch" placeholder="Search drop location">
+
+            <button onclick="searchDrop()">
+                Search
+            </button>
+
+            <div id="dropResults"></div>
+
+            <p>
+                Drop:
+                <span id="dropText">
+                    Not selected
+                </span>
+            </p>
+
+            <input id="dropLatitude" type="hidden">
+
+            <input id="dropLongitude" type="hidden">
+
+            <button onclick="bookRide()">
+                Book Ride
+            </button>
+
+        </div>
+
+        <div class="card">
+
+            <h2>Ride Status</h2>
+
+            <div id="rideStatus">
+                No active ride.
+            </div>
+
+        </div>
+
+    </div>
+
+    <script>
+
+        let selectedRiderId = null;
+        let currentRideId = null;
+
+        const connection =
+            new signalR.HubConnectionBuilder()
+                .withUrl("/hubs/ride")
+                .withAutomaticReconnect()
+                .build();
+
+        async function startSignalR() {
+
+            try {
+
+                await connection.start();
+
+                console.log("SignalR connected");
+
+            }
+            catch (error) {
+
+                console.error(error);
+
+                setTimeout(
+                    startSignalR,
+                    3000);
+            }
+        }
+
+        connection.on(
+            "RideStatusChanged",
+            async data => {
+
+                if (data.rideId === currentRideId) {
+
+                    await loadRide();
+                }
+            });
+
+        async function loadRiders() {
+
+            const response =
+                await fetch("/api/riders");
+
+            const riders =
+                await response.json();
+
+            const select =
+                document.getElementById(
+                    "riderSelect");
+
+            select.innerHTML =
+                '<option value="">Select Rider</option>';
+
+            riders.forEach(rider => {
+
+                const option =
+                    document.createElement("option");
+
+                option.value =
+                    rider.riderId;
+
+                option.textContent =
+                    `${rider.fullName} - ${rider.phoneNumber}`;
+
+                select.appendChild(option);
+            });
+        }
+
+        async function selectRider() {
+
+            const select =
+                document.getElementById(
+                    "riderSelect");
+
+            selectedRiderId =
+                Number(select.value) || null;
+        }
+
+        async function createRider() {
+
+            const name =
+                document.getElementById(
+                    "riderName").value;
+
+            const phone =
+                document.getElementById(
+                    "riderPhone").value;
+
+            if (!name || !phone) {
+
+                alert("Enter rider details.");
+
+                return;
+            }
+
+            const response =
+                await fetch(
+                    "/api/riders",
+                    {
+                        method: "POST",
+
+                        headers: {
+                            "Content-Type":
+                                "application/json"
+                        },
+
+                        body: JSON.stringify({
+                            fullName: name,
+                            phoneNumber: phone
+                        })
+                    });
+
+            const data =
+                await response.json();
+
+            if (!response.ok) {
+
+                alert(data.message);
+
+                return;
+            }
+
+            alert(
+                `Rider created. ID: ${data.riderId}`);
+
+            document.getElementById(
+                "riderName").value = "";
+
+            document.getElementById(
+                "riderPhone").value = "";
+
+            await loadRiders();
+        }
+
+        function useCurrentLocation() {
+
+            if (!navigator.geolocation) {
+
+                alert(
+                    "GPS is not supported.");
+
+                return;
+            }
+
+            navigator.geolocation.getCurrentPosition(
+                position => {
+
+                    const lat =
+                        position.coords.latitude;
+
+                    const lon =
+                        position.coords.longitude;
+
+                    setPickup(
+                        lat,
+                        lon,
+                        "Current Location");
+                },
+
+                error => {
+
+                    alert(
+                        "Please allow location permission.");
+                },
+
+                {
+                    enableHighAccuracy: true,
+                    timeout: 10000
+                }
+            );
+        }
+
+        async function searchPickup() {
+
+            const query =
+                document.getElementById(
+                    "pickupSearch").value;
+
+            await searchLocation(
+                query,
+                "pickupResults",
+                setPickup);
+        }
+
+        async function searchDrop() {
+
+            const query =
+                document.getElementById(
+                    "dropSearch").value;
+
+            await searchLocation(
+                query,
+                "dropResults",
+                setDrop);
+        }
+
+        async function searchLocation(
+            query,
+            resultElementId,
+            callback) {
+
+            if (!query) {
+
+                alert("Enter a location.");
+
+                return;
+            }
+
+            const url =
+                "https://nominatim.openstreetmap.org/search" +
+                `?q=${encodeURIComponent(query)}` +
+                "&format=json" +
+                "&limit=5";
+
+            const response =
+                await fetch(
+                    url,
+                    {
+                        headers: {
+                            "Accept-Language":
+                                "en"
+                        }
+                    });
+
+            const results =
+                await response.json();
+
+            const container =
+                document.getElementById(
+                    resultElementId);
+
+            container.innerHTML = "";
+
+            if (results.length === 0) {
+
+                container.innerHTML =
+                    "<p>No locations found.</p>";
+
+                return;
+            }
+
+            results.forEach(item => {
+
+                const button =
+                    document.createElement(
+                        "button");
+
+                button.className =
+                    "location-result";
+
+                button.innerText =
+                    item.display_name;
+
+                button.onclick = () => {
+
+                    callback(
+                        Number(item.lat),
+                        Number(item.lon),
+                        item.display_name);
+
+                    container.innerHTML = "";
+                };
+
+                container.appendChild(button);
+            });
+        }
+
+        function setPickup(
+            latitude,
+            longitude,
+            name) {
+
+            document.getElementById(
+                "pickupLatitude").value =
+                latitude;
+
+            document.getElementById(
+                "pickupLongitude").value =
+                longitude;
+
+            document.getElementById(
+                "pickupText").innerText =
+                `${name} (${latitude.toFixed(6)}, ${longitude.toFixed(6)})`;
+        }
+
+        function setDrop(
+            latitude,
+            longitude,
+            name) {
+
+            document.getElementById(
+                "dropLatitude").value =
+                latitude;
+
+            document.getElementById(
+                "dropLongitude").value =
+                longitude;
+
+            document.getElementById(
+                "dropText").innerText =
+                `${name} (${latitude.toFixed(6)}, ${longitude.toFixed(6)})`;
+        }
+
+        async function bookRide() {
+
+            if (!selectedRiderId) {
+
+                alert("Select a rider.");
+
+                return;
+            }
+
+            const pickupLatitude =
+                Number(
+                    document.getElementById(
+                        "pickupLatitude").value);
+
+            const pickupLongitude =
+                Number(
+                    document.getElementById(
+                        "pickupLongitude").value);
+
+            const dropLatitude =
+                Number(
+                    document.getElementById(
+                        "dropLatitude").value);
+
+            const dropLongitude =
+                Number(
+                    document.getElementById(
+                        "dropLongitude").value);
+
+            if (!pickupLatitude ||
+                !pickupLongitude ||
+                !dropLatitude ||
+                !dropLongitude) {
+
+                alert(
+                    "Please select pickup and drop locations.");
+
+                return;
+            }
+
+            const response =
+                await fetch(
+                    "/api/rides",
+                    {
+                        method: "POST",
+
+                        headers: {
+                            "Content-Type":
+                                "application/json"
+                        },
+
+                        body: JSON.stringify({
+
+                            riderId:
+                                selectedRiderId,
+
+                            pickupLatitude,
+
+                            pickupLongitude,
+
+                            dropoffLatitude:
+                                dropLatitude,
+
+                            dropoffLongitude:
+                                dropLongitude
+                        })
+                    });
+
+            const data =
+                await response.json();
+
+            if (!response.ok) {
+
+                alert(data.message);
+
+                return;
+            }
+
+            currentRideId =
+                data.rideId;
+
+            await connection.invoke(
+                "JoinRide",
+                currentRideId);
+
+            document.getElementById(
+                "rideStatus").innerHTML =
+                `
+        <h3>Searching for driver...</h3>
+        <p>Ride #${currentRideId}</p>
+        `;
+
+            await loadRide();
+        }
+
+        async function loadRide() {
+
+            if (!currentRideId)
+                return;
+
+            const response =
+                await fetch(
+                    `/api/rides/${currentRideId}`);
+
+            if (!response.ok)
+                return;
+
+            const ride =
+                await response.json();
+
+            let html = `
+        <h3>
+            ${ride.statusText}
+        </h3>
+
+        <p>
+            Ride #${ride.rideId}
+        </p>
+    `;
+
+            if (ride.driverId) {
+
+                html += `
+
+            <hr>
+
+            <h3>Driver Details</h3>
+
+            <p>
+                Name:
+                ${ride.driverName || "-"}
+            </p>
+
+            <p>
+                Phone:
+                ${ride.driverPhone || "-"}
+            </p>
+
+            <p>
+                Vehicle:
+                ${ride.vehicleNumber || "-"}
+            </p>
+
+        `;
+            }
+
+            if (
+                ride.statusText !== "Completed" &&
+                ride.statusText !== "Cancelled" &&
+                ride.statusText !== "NoDriverFound"
+            ) {
+
+                html += `
+
+            <button onclick="cancelRide()">
+                Cancel Ride
+            </button>
+
+        `;
+            }
+
+            document.getElementById(
+                "rideStatus").innerHTML =
+                html;
+        }
+
+        async function cancelRide() {
+
+            if (!currentRideId)
+                return;
+
+            const reason =
+                prompt(
+                    "Cancellation reason:");
+
+            const response =
+                await fetch(
+                    `/api/rides/${currentRideId}/cancel`,
+                    {
+                        method: "POST",
+
+                        headers: {
+                            "Content-Type":
+                                "application/json"
+                        },
+
+                        body: JSON.stringify({
+                            reason
+                        })
+                    });
+
+            const data =
+                await response.json();
+
+            if (!response.ok) {
+
+                alert(data.message);
+
+                return;
+            }
+
+            await loadRide();
+        }
+
+        startSignalR();
+
+        loadRiders();
+
+    </script>
+
+</body>
+
+</html>

@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Driver App</title>
+
+    <link rel="stylesheet" href="/css/style.css">
+
+    <script src="https://cdn.jsdelivr.net/npm/@microsoft/signalr@8.0.7/dist/browser/signalr.min.js"></script>
+</head>
+
+<body>
+
+    <div class="container">
+
+        <h1>Driver App</h1>
+
+        <div class="card">
+
+            <h2>Driver Registration</h2>
+
+            <input id="driverName" placeholder="Full Name">
+
+            <input id="driverPhone" placeholder="Phone Number">
+
+            <input id="vehicleNumber" placeholder="Vehicle Number">
+
+            <button onclick="createDriver()">
+                Register Driver
+            </button>
+
+        </div>
+
+        <div class="card">
+
+            <h2>Select Driver</h2>
+
+            <select id="driverSelect" onchange="selectDriver()">
+
+                <option value="">
+                    Select Driver
+                </option>
+
+            </select>
+
+            <p>
+                Status:
+                <strong id="driverStatus">
+                    Offline
+                </strong>
+            </p>
+
+            <p>
+                Latitude:
+                <span id="latitude">-</span>
+            </p>
+
+            <p>
+                Longitude:
+                <span id="longitude">-</span>
+            </p>
+
+            <button onclick="goOnline()">
+                Go Online
+            </button>
+
+            <button onclick="goOffline()">
+                Go Offline
+            </button>
+
+        </div>
+
+        <div class="card">
+
+            <h2>Current Ride Request</h2>
+
+            <div id="rideRequest">
+                No ride request.
+            </div>
+
+        </div>
+
+        <div class="card">
+
+            <h2>Current Ride</h2>
+
+            <div id="currentRide">
+                No active ride.
+            </div>
+
+        </div>
+
+    </div>
+
+    <script>
+
+        let selectedDriverId = null;
+        let currentRideId = null;
+        let watchId = null;
+
+        const connection =
+            new signalR.HubConnectionBuilder()
+                .withUrl("/hubs/ride")
+                .withAutomaticReconnect()
+                .build();
+
+        async function startSignalR() {
+
+            try {
+
+                await connection.start();
+
+                console.log("SignalR connected");
+
+            }
+            catch (error) {
+
+                console.error(error);
+
+                setTimeout(startSignalR, 3000);
+            }
+        }
+
+        connection.on(
+            "RideRequestReceived",
+            data => {
+
+                currentRideId = data.rideId;
+
+                document.getElementById(
+                    "rideRequest").innerHTML = `
+
+            <p><b>Ride #${data.rideId}</b></p>
+
+            <p>
+                Pickup:
+                ${data.pickupLatitude},
+                ${data.pickupLongitude}
+            </p>
+
+            <p>
+                Drop:
+                ${data.dropoffLatitude},
+                ${data.dropoffLongitude}
+            </p>
+
+            <p>
+                Distance:
+                ${data.distanceKm} KM
+            </p>
+
+            <button onclick="acceptRide()">
+                Accept
+            </button>
+
+            <button onclick="rejectRide()">
+                Reject
+            </button>
+        `;
+            });
+
+        connection.on(
+            "RideStatusChanged",
+            data => {
+
+                if (data.rideId === currentRideId) {
+
+                    loadRide(data.rideId);
+                }
+            });
+
+        connection.on(
+            "DriverStatusChanged",
+            data => {
+
+                if (data.driverId === selectedDriverId) {
+
+                    document.getElementById(
+                        "driverStatus").innerText =
+                        data.status;
+                }
+            });
+
+        async function loadDrivers() {
+
+            const response =
+                await fetch("/api/drivers");
+
+            const drivers =
+                await response.json();
+
+            const select =
+                document.getElementById(
+                    "driverSelect");
+
+            select.innerHTML =
+                '<option value="">Select Driver</option>';
+
+            drivers.forEach(driver => {
+
+                const option =
+                    document.createElement("option");
+
+                option.value =
+                    driver.driverId;
+
+                option.textContent =
+                    `${driver.fullName} - ${driver.vehicleNumber}`;
+
+                select.appendChild(option);
+            });
+        }
+
+        function selectDriver() {
+
+            const select =
+                document.getElementById(
+                    "driverSelect");
+
+            selectedDriverId =
+                Number(select.value) || null;
+
+            if (!selectedDriverId)
+                return;
+
+            connection.invoke(
+                "JoinDriver",
+                selectedDriverId);
+
+            startLocationTracking();
+
+            loadDriver();
+        }
+
+        async function loadDriver() {
+
+            if (!selectedDriverId)
+                return;
+
+            const response =
+                await fetch(
+                    `/api/drivers/${selectedDriverId}`);
+
+            const driver =
+                await response.json();
+
+            document.getElementById(
+                "driverStatus").innerText =
+                driver.status;
+
+            document.getElementById(
+                "latitude").innerText =
+                driver.currentLatitude || "-";
+
+            document.getElementById(
+                "longitude").innerText =
+                driver.currentLongitude || "-";
+        }
+
+        function startLocationTracking() {
+
+            if (watchId !== null)
+                return;
+
+            if (!navigator.geolocation) {
+
+                alert(
+                    "GPS is not supported by this browser.");
+
+                return;
+            }
+
+            watchId =
+                navigator.geolocation.watchPosition(
+
+                    async position => {
+
+                        if (!selectedDriverId)
+                            return;
+
+                        const latitude =
+                            position.coords.latitude;
+
+                        const longitude =
+                            position.coords.longitude;
+
+                        document.getElementById(
+                            "latitude").innerText =
+                            latitude.toFixed(6);
+
+                        document.getElementById(
+                            "longitude").innerText =
+                            longitude.toFixed(6);
+
+                        await fetch(
+                            `/api/drivers/${selectedDriverId}/location`,
+                            {
+                                method: "POST",
+
+                                headers: {
+                                    "Content-Type":
+                                        "application/json"
+                                },
+
+                                body: JSON.stringify({
+                                    latitude,
+                                    longitude
+                                })
+                            });
+                    },
+
+                    error => {
+
+                        console.error(
+                            "GPS error:",
+                            error);
+
+                        alert(
+                            "Please allow browser location permission.");
+                    },
+
+                    {
+                        enableHighAccuracy: true,
+                        maximumAge: 3000,
+                        timeout: 10000
+                    }
+                );
+        }
+
+        async function goOnline() {
+
+            if (!selectedDriverId) {
+
+                alert("Select a driver first.");
+
+                return;
+            }
+
+            const response =
+                await fetch(
+                    `/api/drivers/${selectedDriverId}/online`,
+                    {
+                        method: "POST"
+                    });
+
+            const data =
+                await response.json();
+
+            if (!response.ok) {
+
+                alert(data.message);
+
+                return;
+            }
+
+            document.getElementById(
+                "driverStatus").innerText =
+                data.status;
+        }
+
+        async function goOffline() {
+
+            if (!selectedDriverId)
+                return;
+
+            const response =
+                await fetch(
+                    `/api/drivers/${selectedDriverId}/offline`,
+                    {
+                        method: "POST"
+                    });
+
+            const data =
+                await response.json();
+
+            if (!response.ok) {
+
+                alert(data.message);
+
+                return;
+            }
+
+            document.getElementById(
+                "driverStatus").innerText =
+                data.status;
+        }
+
+        async function acceptRide() {
+
+            if (!currentRideId)
+                return;
+
+            const response =
+                await fetch(
+                    `/api/rides/${currentRideId}/accept`,
+                    {
+                        method: "POST"
+                    });
+
+            const data =
+                await response.json();
+
+            if (!response.ok) {
+
+                alert(data.message);
+
+                return;
+            }
+
+            document.getElementById(
+                "rideRequest").innerHTML =
+                "Ride accepted.";
+
+            await loadRide(currentRideId);
+        }
+
+        async function rejectRide() {
+
+            if (!currentRideId)
+                return;
+
+            const response =
+                await fetch(
+                    `/api/rides/${currentRideId}/reject`,
+                    {
+                        method: "POST"
+                    });
+
+            const data =
+                await response.json();
+
+            if (!response.ok) {
+
+                alert(data.message);
+
+                return;
+            }
+
+            document.getElementById(
+                "rideRequest").innerHTML =
+                "Ride rejected. Waiting for another request.";
+
+            currentRideId = null;
+        }
+
+        async function loadRide(rideId) {
+
+            const response =
+                await fetch(
+                    `/api/rides/${rideId}`);
+
+            if (!response.ok)
+                return;
+
+            const ride =
+                await response.json();
+
+            document.getElementById(
+                "currentRide").innerHTML = `
+
+        <p>
+            Ride #${ride.rideId}
+        </p>
+
+        <p>
+            Status:
+            <strong>${ride.statusText}</strong>
+        </p>
+
+        ${ride.statusText === "DriverAssigned"
+                    ? `
+                <button onclick="driverArrived()">
+                    Driver Arrived
+                </button>
+              `
+                    : ""
+                }
+
+        ${ride.statusText === "DriverArrived"
+                    ? `
+                <button onclick="startRide()">
+                    Start Ride
+                </button>
+              `
+                    : ""
+                }
+
+        ${ride.statusText === "InProgress"
+                    ? `
+                <button onclick="completeRide()">
+                    Complete Ride
+                </button>
+              `
+                    : ""
+                }
+    `;
+        }
+
+        async function driverArrived() {
+
+            await rideAction("arrived");
+        }
+
+        async function startRide() {
+
+            await rideAction("start");
+        }
+
+        async function completeRide() {
+
+            await rideAction("complete");
+        }
+
+        async function rideAction(action) {
+
+            const response =
+                await fetch(
+                    `/api/rides/${currentRideId}/${action}`,
+                    {
+                        method: "POST"
+                    });
+
+            const data =
+                await response.json();
+
+            if (!response.ok) {
+
+                alert(data.message);
+
+                return;
+            }
+
+            await loadRide(currentRideId);
+
+            if (action === "complete") {
+
+                document.getElementById(
+                    "rideRequest").innerHTML =
+                    "Ride completed. Waiting for next ride.";
+
+                currentRideId = null;
+            }
+        }
+
+        async function createDriver() {
+
+            const name =
+                document.getElementById(
+                    "driverName").value;
+
+            const phone =
+                document.getElementById(
+                    "driverPhone").value;
+
+            const vehicle =
+                document.getElementById(
+                    "vehicleNumber").value;
+
+            if (!name || !phone || !vehicle) {
+
+                alert("Enter all driver details.");
+
+                return;
+            }
+
+            const response =
+                await fetch(
+                    "/api/drivers",
+                    {
+                        method: "POST",
+
+                        headers: {
+                            "Content-Type":
+                                "application/json"
+                        },
+
+                        body: JSON.stringify({
+                            fullName: name,
+                            phoneNumber: phone,
+                            vehicleNumber: vehicle
+                        })
+                    });
+
+            const data =
+                await response.json();
+
+            if (!response.ok) {
+
+                alert(data.message);
+
+                return;
+            }
+
+            alert(
+                `Driver created. ID: ${data.driverId}`);
+
+            document.getElementById(
+                "driverName").value = "";
+
+            document.getElementById(
+                "driverPhone").value = "";
+
+            document.getElementById(
+                "vehicleNumber").value = "";
+
+            await loadDrivers();
+        }
+
+        startSignalR();
+
+        loadDrivers();
+
+    </script>
+
+</body>
+
+</html>
